@@ -2,20 +2,24 @@
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NPA Live Camera</title>
+  <title>NPA Live Visit Camera</title>
+
   <style>
     body {
       font-family: Arial, sans-serif;
       background: #f2f5f9;
       text-align: center;
       padding: 15px;
+      color: #222;
     }
-    video, canvas, img {
+
+    video, img {
       width: 100%;
       max-width: 480px;
       border-radius: 10px;
       background: #222;
     }
+
     button {
       padding: 14px 22px;
       margin: 10px;
@@ -24,91 +28,198 @@
       background: #0759bd;
       color: white;
       font-size: 16px;
+      cursor: pointer;
     }
-    #status { margin: 15px; }
+
+    button:disabled {
+      background: #999;
+    }
+
+    #status {
+      margin: 15px;
+      white-space: pre-wrap;
+    }
   </style>
 </head>
-<body>
-  <h2>NPA Live Visit Camera</h2>
-  <p>Capture a fresh photo of the client visit.</p>
 
-  <video id="video" autoplay playsinline></video>
+<body>
+
+  <h2>NPA Live Visit Camera</h2>
+
+  <p>Capture a fresh live photo for the NPA visit.</p>
+
+  <video id="video" autoplay playsinline class="hidden"></video>
+
   <br>
-  <button id="start">Open Camera</button>
-  <button id="capture" disabled>Capture Photo</button>
+
+  <button id="start">OPEN CAMERA</button>
+  <button id="capture" disabled>CAPTURE PHOTO</button>
 
   <canvas id="canvas" hidden></canvas>
-  <br>
-  <img id="preview" hidden>
 
-  <p id="status">Camera not started.</p>
+  <br>
+
+  <img id="preview" hidden alt="Captured photo">
+
+  <p id="status">Ready to open camera.</p>
 
   <script>
-    const video = document.getElementById("video");
-    const canvas = document.getElementById("canvas");
-    const preview = document.getElementById("preview");
-    const statusText = document.getElementById("status");
-    const captureBtn = document.getElementById("capture");
+
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const preview = document.getElementById('preview');
+    const statusText = document.getElementById('status');
+    const captureBtn = document.getElementById('capture');
+    const startBtn = document.getElementById('start');
+
+    const params = new URLSearchParams(location.search);
+
+    const token = params.get('token');
+    const parentOrigin = params.get('parentOrigin');
+
+    const allowedParentOrigin = 'https://script.google.com';
 
     let stream = null;
 
-    document.getElementById("start").onclick = async () => {
+    // Validate that the page was opened with the app's camera session.
+    if (!token || !parentOrigin) {
+      statusText.textContent =
+        'Invalid camera session. Please open the camera from the NPA app.';
+      startBtn.disabled = true;
+    }
+
+    startBtn.onclick = async function() {
+
       try {
+
+        if (!navigator.mediaDevices ||
+            !navigator.mediaDevices.getUserMedia) {
+          throw new Error(
+            'Camera is not supported. Open this page in Chrome or Safari.'
+          );
+        }
+
+        startBtn.disabled = true;
+        statusText.textContent = 'Requesting camera access...';
+
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
-          audio: false
+          audio: false,
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 1280 }
+          }
         });
 
         video.srcObject = stream;
+        video.classList.remove('hidden');
+
+        await video.play();
+
         captureBtn.disabled = false;
-        statusText.textContent = "Camera ready.";
-      } catch (error) {
         statusText.textContent =
-          "Camera error: " + error.name + " - " + error.message;
+          'Camera ready. Please capture the live photo.';
+
+        startBtn.textContent = 'CAMERA OPENED';
+
+      } catch (error) {
+
+        stopCamera();
+
+        statusText.textContent =
+          'Camera error: ' + error.name + '\n' + error.message;
+
+        startBtn.disabled = false;
+        startBtn.textContent = 'RETRY OPEN CAMERA';
       }
     };
 
-    captureBtn.onclick = () => {
-      if (!stream) return;
+    captureBtn.onclick = function() {
+
+      if (!stream || !video.videoWidth) {
+        statusText.textContent =
+          'Please open the camera first.';
+        return;
+      }
+
+      captureBtn.disabled = true;
 
       const maxWidth = 1280;
-      const scale = Math.min(1, maxWidth / video.videoWidth);
 
-      canvas.width = Math.round(video.videoWidth * scale);
-      canvas.height = Math.round(video.videoHeight * scale);
+      let width = video.videoWidth;
+      let height = video.videoHeight;
 
-      canvas.getContext("2d").drawImage(
-        video, 0, 0, canvas.width, canvas.height
+      if (width > height && width > maxWidth) {
+        height = Math.round(height * maxWidth / width);
+        width = maxWidth;
+      } else if (height >= width && height > maxWidth) {
+        width = Math.round(width * maxWidth / height);
+        height = maxWidth;
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+
+      canvas.getContext('2d').drawImage(
+        video, 0, 0, width, height
       );
 
-      const photoData = canvas.toDataURL("image/jpeg", 0.72);
+      const photoData = canvas.toDataURL(
+        'image/jpeg',
+        0.72
+      );
+
       preview.src = photoData;
       preview.hidden = false;
 
-      stream.getTracks().forEach(track => track.stop());
-      stream = null;
-      captureBtn.disabled = true;
+      stopCamera();
 
-      statusText.textContent = "Photo captured.";
+      statusText.textContent = 'Photo captured. Sending to NPA app...';
 
-      if (window.opener && !window.opener.closed) {
-        window.opener.postMessage({
-          type: "NPA_CAMERA_PHOTO",
-          token: new URLSearchParams(location.search).get("token"),
-          photoData: photoData
-        }, "*");
+      try {
 
-        statusText.textContent = "Photo sent to NPA Visit App.";
-        setTimeout(() => window.close(), 1000);
-      } else {
+        if (!window.opener || window.opener.closed) {
+          throw new Error(
+            'NPA app window not found. Reopen the camera from the NPA app.'
+          );
+        }
+
+        // Return photo only to the exact parent origin supplied by NPA.
+        window.opener.postMessage(
+          {
+            type: 'NPA_CAMERA_PHOTO',
+            token: token,
+            photoData: photoData
+          },
+          parentOrigin
+        );
+
         statusText.textContent =
-          "NPA app connection not found. Open camera from the NPA app.";
+          'Photo sent to NPA app. You can close this window.';
+
+        setTimeout(function() {
+          window.close();
+        }, 1500);
+
+      } catch (error) {
+
+        statusText.textContent =
+          'Unable to send photo: ' + error.message;
       }
     };
 
-    window.addEventListener("beforeunload", () => {
-      if (stream) stream.getTracks().forEach(track => track.stop());
-    });
+    function stopCamera() {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+
+      video.srcObject = null;
+    }
+
+    window.addEventListener('beforeunload', stopCamera);
+
   </script>
+
 </body>
 </html>
