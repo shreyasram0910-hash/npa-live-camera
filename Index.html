@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NPA Live Camera</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f2f5f9;
+      text-align: center;
+      padding: 15px;
+    }
+    video, canvas, img {
+      width: 100%;
+      max-width: 480px;
+      border-radius: 10px;
+      background: #222;
+    }
+    button {
+      padding: 14px 22px;
+      margin: 10px;
+      border: 0;
+      border-radius: 8px;
+      background: #0759bd;
+      color: white;
+      font-size: 16px;
+    }
+    #status { margin: 15px; }
+  </style>
+</head>
+<body>
+  <h2>NPA Live Visit Camera</h2>
+  <p>Capture a fresh photo of the client visit.</p>
+
+  <video id="video" autoplay playsinline></video>
+  <br>
+  <button id="start">Open Camera</button>
+  <button id="capture" disabled>Capture Photo</button>
+
+  <canvas id="canvas" hidden></canvas>
+  <br>
+  <img id="preview" hidden>
+
+  <p id="status">Camera not started.</p>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const preview = document.getElementById("preview");
+    const statusText = document.getElementById("status");
+    const captureBtn = document.getElementById("capture");
+
+    let stream = null;
+
+    document.getElementById("start").onclick = async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false
+        });
+
+        video.srcObject = stream;
+        captureBtn.disabled = false;
+        statusText.textContent = "Camera ready.";
+      } catch (error) {
+        statusText.textContent =
+          "Camera error: " + error.name + " - " + error.message;
+      }
+    };
+
+    captureBtn.onclick = () => {
+      if (!stream) return;
+
+      const maxWidth = 1280;
+      const scale = Math.min(1, maxWidth / video.videoWidth);
+
+      canvas.width = Math.round(video.videoWidth * scale);
+      canvas.height = Math.round(video.videoHeight * scale);
+
+      canvas.getContext("2d").drawImage(
+        video, 0, 0, canvas.width, canvas.height
+      );
+
+      const photoData = canvas.toDataURL("image/jpeg", 0.72);
+      preview.src = photoData;
+      preview.hidden = false;
+
+      stream.getTracks().forEach(track => track.stop());
+      stream = null;
+      captureBtn.disabled = true;
+
+      statusText.textContent = "Photo captured.";
+
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage({
+          type: "NPA_CAMERA_PHOTO",
+          token: new URLSearchParams(location.search).get("token"),
+          photoData: photoData
+        }, "*");
+
+        statusText.textContent = "Photo sent to NPA Visit App.";
+        setTimeout(() => window.close(), 1000);
+      } else {
+        statusText.textContent =
+          "NPA app connection not found. Open camera from the NPA app.";
+      }
+    };
+
+    window.addEventListener("beforeunload", () => {
+      if (stream) stream.getTracks().forEach(track => track.stop());
+    });
+  </script>
+</body>
+</html>
