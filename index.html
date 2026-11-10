@@ -22,7 +22,7 @@
 
     button {
       padding: 14px 22px;
-      margin: 10px;
+      margin: 8px;
       border: 0;
       border-radius: 8px;
       background: #0759bd;
@@ -35,9 +35,17 @@
       background: #999;
     }
 
+    #switchCamera {
+      background: #198754;
+    }
+
     #status {
       margin: 15px;
       white-space: pre-wrap;
+    }
+
+    .hidden {
+      display: none;
     }
   </style>
 </head>
@@ -45,7 +53,6 @@
 <body>
 
   <h2>NPA Live Visit Camera</h2>
-
   <p>Capture a fresh live photo for the NPA visit.</p>
 
   <video id="video" autoplay playsinline class="hidden"></video>
@@ -53,7 +60,14 @@
   <br>
 
   <button id="start">OPEN CAMERA</button>
-  <button id="capture" disabled>CAPTURE PHOTO</button>
+
+  <button id="switchCamera" disabled>
+    SWITCH FRONT / BACK
+  </button>
+
+  <button id="capture" disabled>
+    CAPTURE PHOTO
+  </button>
 
   <canvas id="canvas" hidden></canvas>
 
@@ -61,7 +75,7 @@
 
   <img id="preview" hidden alt="Captured photo">
 
-  <p id="status">Ready to open camera.</p>
+  <p id="status">Ready to open back camera.</p>
 
   <script>
 
@@ -69,43 +83,56 @@
     const canvas = document.getElementById('canvas');
     const preview = document.getElementById('preview');
     const statusText = document.getElementById('status');
+
     const captureBtn = document.getElementById('capture');
     const startBtn = document.getElementById('start');
+    const switchBtn = document.getElementById('switchCamera');
 
     const params = new URLSearchParams(location.search);
 
     const token = params.get('token');
     const parentOrigin = params.get('parentOrigin');
 
-    const allowedParentOrigin = 'https://script.google.com';
-
     let stream = null;
+    let currentFacingMode = 'environment';
+    let cameraBusy = false;
 
-    // Validate that the page was opened with the app's camera session.
     if (!token || !parentOrigin) {
       statusText.textContent =
         'Invalid camera session. Please open the camera from the NPA app.';
       startBtn.disabled = true;
     }
 
-    startBtn.onclick = async function() {
+    // OPEN CAMERA
+    async function openCamera() {
+
+      if (cameraBusy) return;
+
+      cameraBusy = true;
+      startBtn.disabled = true;
+      switchBtn.disabled = true;
+      captureBtn.disabled = true;
 
       try {
+
+        stopCamera();
+
+        statusText.textContent =
+          currentFacingMode === 'environment'
+            ? 'Opening back camera...'
+            : 'Opening front camera...';
 
         if (!navigator.mediaDevices ||
             !navigator.mediaDevices.getUserMedia) {
           throw new Error(
-            'Camera is not supported. Open this page in Chrome or Safari.'
+            'Camera is not supported. Please use Chrome or Safari.'
           );
         }
-
-        startBtn.disabled = true;
-        statusText.textContent = 'Requesting camera access...';
 
         stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
           video: {
-            facingMode: { ideal: 'environment' },
+            facingMode: { ideal: currentFacingMode },
             width: { ideal: 1280 },
             height: { ideal: 1280 }
           }
@@ -117,10 +144,14 @@
         await video.play();
 
         captureBtn.disabled = false;
-        statusText.textContent =
-          'Camera ready. Please capture the live photo.';
+        switchBtn.disabled = false;
 
         startBtn.textContent = 'CAMERA OPENED';
+
+        statusText.textContent =
+          currentFacingMode === 'environment'
+            ? 'BACK CAMERA READY. Capture your photo or switch camera.'
+            : 'FRONT CAMERA READY. Capture your photo or switch camera.';
 
       } catch (error) {
 
@@ -131,9 +162,34 @@
 
         startBtn.disabled = false;
         startBtn.textContent = 'RETRY OPEN CAMERA';
+
+      } finally {
+        cameraBusy = false;
       }
+    }
+
+    // SWITCH FRONT / BACK CAMERA
+    async function switchCamera() {
+
+      if (cameraBusy || !stream) return;
+
+      currentFacingMode =
+        currentFacingMode === 'environment'
+          ? 'user'
+          : 'environment';
+
+      await openCamera();
+    }
+
+    startBtn.onclick = function() {
+      openCamera();
     };
 
+    switchBtn.onclick = function() {
+      switchCamera();
+    };
+
+    // CAPTURE LIVE PHOTO
     captureBtn.onclick = function() {
 
       if (!stream || !video.videoWidth) {
@@ -143,6 +199,8 @@
       }
 
       captureBtn.disabled = true;
+      switchBtn.disabled = true;
+      startBtn.disabled = true;
 
       const maxWidth = 1280;
 
@@ -174,17 +232,17 @@
 
       stopCamera();
 
-      statusText.textContent = 'Photo captured. Sending to NPA app...';
+      statusText.textContent =
+        'Photo captured. Sending to NPA app...';
 
       try {
 
         if (!window.opener || window.opener.closed) {
           throw new Error(
-            'NPA app window not found. Reopen the camera from the NPA app.'
+            'NPA app window not found. Reopen camera from NPA app.'
           );
         }
 
-        // Return photo only to the exact parent origin supplied by NPA.
         window.opener.postMessage(
           {
             type: 'NPA_CAMERA_PHOTO',
@@ -195,7 +253,7 @@
         );
 
         statusText.textContent =
-          'Photo sent to NPA app. You can close this window.';
+          'Photo sent successfully to NPA app.';
 
         setTimeout(function() {
           window.close();
@@ -205,12 +263,20 @@
 
         statusText.textContent =
           'Unable to send photo: ' + error.message;
+
+        startBtn.disabled = false;
+        startBtn.textContent = 'OPEN CAMERA AGAIN';
       }
     };
 
+    // STOP CAMERA
     function stopCamera() {
+
       if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach(track => {
+          track.stop();
+        });
+
         stream = null;
       }
 
